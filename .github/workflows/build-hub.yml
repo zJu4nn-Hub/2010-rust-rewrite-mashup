@@ -1,0 +1,71 @@
+# Build used by the zJu4nn Hub "Mashups" tab.
+# Compiles the game (Rust, the `launcher` crate -> iw4l.exe) from this fork's source on Windows and publishes one zip
+# with the licence files the binary needs (fonts are compiled in). No game files are included; Skate 3 is not built.
+# Upstream: https://github.com/chasmlol/2010-rust-rewrite-mashup (Apache-2.0), on IW4L by vladtrc (Apache-2.0).
+name: build-hub
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. hub-v0.4.0-1)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust (toolchain from rust-toolchain.toml)
+        shell: pwsh
+        run: |
+          rustup show
+          rustc --version
+
+      - name: Build iw4l.exe
+        shell: pwsh
+        run: cargo build --release -p launcher
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem target/release -Filter iw4l.exe | Select-Object -First 1
+          if (!$exe) { throw "iw4l.exe not found"; }
+          $p = 'pkg'
+          New-Item -ItemType Directory $p -Force | Out-Null
+          Copy-Item $exe.FullName "$p/iw4l.exe"
+          Copy-Item LICENSE "$p/LICENSE"
+          Copy-Item NOTICE "$p/NOTICE"
+          Copy-Item crates/ui/assets/OFL-Oxanium.txt "$p/OFL-Oxanium.txt"
+          Copy-Item crates/console/assets/COPYING-FreeFont.txt "$p/COPYING-FreeFont.txt"
+          @(
+            '2010 Rust Rewrite Mashup (build do zJu4nn Hub)',
+            '',
+            'MW2, Skate 3 e Minecraft num jogo so, em Rust (IW4L de vladtrc). Original de chasmlol',
+            '(github.com/chasmlol/2010-rust-rewrite-mashup). Licenca Apache-2.0.',
+            'Precisa do Call of Duty: Modern Warfare 2 (2009) com o multiplayer. O mapa do Minecraft baixa os',
+            'arquivos do Minecraft direto dos servidores da Mojang na 1a vez.',
+            'Projeto de fas, sem ligacao com Activision, Infinity Ward, EA ou Mojang.'
+          ) | Set-Content "$p/LEIA.txt" -Encoding utf8
+          $sums = Get-ChildItem $p -File | ForEach-Object { "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)" }
+          $sums | Set-Content "$p/SHA256SUMS.txt" -Encoding ascii
+          $sums
+          $ver = ((Get-Content crates/launcher/Cargo.toml | Where-Object { $_ -match '^version' } | Select-Object -First 1) -split '"')[1]
+          if (!$ver) { $ver = 'main' }
+          $zip = "rust2010-mashup-hub-$ver.zip"
+          Compress-Archive -Path "$p/*" -DestinationPath $zip
+          "ZIP=$zip" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "VER=$ver" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          Get-FileHash $zip -Algorithm SHA256 | Format-List
+
+      - name: Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ inputs.tag }}" $env:ZIP --repo "${{ github.repository }}" --title "2010 Rust Rewrite Mashup $env:VER (zJu4nn Hub)" --notes "Build of chasmlol/2010-rust-rewrite-mashup for the zJu4nn Hub Mashups tab, compiled from this fork at ${{ github.sha }}. Apache-2.0."
